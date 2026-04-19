@@ -1,0 +1,9 @@
+Disease,Symptom_1,Symptom_2,Symptom_3,Symptom_4,Symptom_5
+Common Cold,cough,fever,runny_nose,sore_throat,
+Flu,fever,chills,muscle_aches,fatigue,cough
+COVID-19,fever,dry_cough,loss_of_taste,shortness_of_breath,fatigue
+Allergies,sneezing,runny_nose,itchy_eyes,,
+Migraine,headache,nausea,sensitivity_to_light,aura,
+Gastroenteritis,nausea,vomiting,diarrhea,abdominal_cramps,fever
+Anemia,fatigue,weakness,pale_skin,shortness_of_breath,dizziness
+Asthma,shortness_of_breath,chest_tightness,wheezing,cough,
