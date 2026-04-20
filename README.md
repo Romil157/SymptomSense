@@ -1,7 +1,5 @@
 # SymptomSense - Production-Grade Health Informatics System
 
-![SymptomSense Hero Banner](./public/banner.png)
-
 ## Overview
 
 **SymptomSense** is a technically rigorous, production-ready healthcare assistant designed to bridge the gap between symptom awareness and clinical understanding. By leveraging a high-fidelity weighted scoring engine and the advanced reasoning of **NVIDIA NIM API** with **Google Gemma 4 (31B)**, SymptomSense provides users with deterministic condition matching followed by structured AI-generated insights.
