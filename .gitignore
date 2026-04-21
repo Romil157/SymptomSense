@@ -27,3 +27,7 @@ node_modules
 .env
 public/Final_Augmented_dataset_Diseases_and_Symptoms.csv
 dist
+coverage
+playwright-report
+test-results
+backend/logs/*.log

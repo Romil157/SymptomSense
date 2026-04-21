@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: 'class',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -7,11 +8,15 @@ export default {
   theme: {
     extend: {
       colors: {
-        brandBlue: "#0077CC",
-        brandLight: "#F4F9FF"
+        brandBlue: "#0f6e88",
+        brandLight: "#edf8fb",
+        brandInk: "#0b1f2a",
+        brandNight: "#08151d",
+        brandSun: "#f59e0b"
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        sans: ['Manrope', 'Segoe UI', 'sans-serif'],
+        display: ['Space Grotesk', 'Manrope', 'sans-serif'],
       }
     },
   },

@@ -1,31 +1,56 @@
 {
-  "name": "healthcare",
+  "name": "symptomsense",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
+  "description": "Production-grade symptom triage and AI clinical insight platform.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:frontend": "vite",
+    "dev:backend": "node --watch backend/server.js",
+    "start": "node backend/server.js",
+    "start:backend": "node backend/server.js",
     "build": "vite build",
+    "build:frontend": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "test": "npm run test:unit && npm run test:api",
+    "test:unit": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/unit --runInBand",
+    "test:api": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/api --runInBand",
+    "test:e2e": "playwright test",
+    "test:ci": "npm run lint && npm run test && npm run build && npm run test:e2e"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.469.0",
     "papaparse": "^5.4.1",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.56.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.1",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
+    "jest": "^30.2.0",
     "postcss": "^8.4.40",
+    "supertest": "^7.1.4",
     "tailwindcss": "^3.4.17",
     "vite": "^8.0.1"
   }

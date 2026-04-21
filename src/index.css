@@ -1,9 +1,63 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  :root {
+    color-scheme: light;
+    --page-bg: #eef5f7;
+    --page-secondary: #d5e7ec;
+  }
+
+  .dark {
+    color-scheme: dark;
+    --page-bg: #07131a;
+    --page-secondary: #0d2632;
+  }
+
+  html {
+    @apply scroll-smooth;
+  }
+
   body {
-    @apply bg-white text-gray-900 antialiased;
+    @apply min-h-screen antialiased;
+    background:
+      radial-gradient(circle at top left, rgba(15, 110, 136, 0.15), transparent 32%),
+      radial-gradient(circle at bottom right, rgba(245, 158, 11, 0.12), transparent 28%),
+      linear-gradient(160deg, var(--page-bg), var(--page-secondary));
+    color: #0b1f2a;
+    font-family: 'Manrope', 'Segoe UI', sans-serif;
+  }
+
+  .dark body {
+    color: #e5f2f7;
+  }
+
+  #root {
+    @apply min-h-screen;
+  }
+}
+
+@layer components {
+  .panel-card {
+    @apply rounded-[28px] border border-white/60 bg-white/75 p-6 shadow-xl shadow-slate-900/5 backdrop-blur-xl dark:border-slate-800/80 dark:bg-slate-950/60 dark:shadow-black/20;
+  }
+
+  .primary-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-brandBlue px-6 py-3 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .secondary-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-slate-300 bg-white/70 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-brandBlue hover:text-brandBlue dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-100;
+  }
+
+  .input-shell {
+    @apply w-full rounded-2xl border border-slate-300 bg-white/80 px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-brandBlue focus:ring-2 focus:ring-brandBlue/20 dark:border-slate-700 dark:bg-slate-950/70 dark:text-white dark:placeholder:text-slate-500;
+  }
+
+  .label-text {
+    @apply text-sm font-semibold text-slate-700 dark:text-slate-200;
   }
 }

@@ -1,246 +1,350 @@
-import React, { useState, useEffect } from 'react';
-import { RefreshCw, Activity, AlertCircle, Info, Stethoscope } from 'lucide-react';
-import { generateDiseaseExplanation } from '../api/nvidia';
-import { errorMessage, ErrorType } from '../utils/errors.js';
+import {
+  Activity,
+  AlertTriangle,
+  BrainCircuit,
+  RefreshCcw,
+  ShieldAlert,
+  Stethoscope,
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { formatPercent } from '../lib/formatters';
+import { getAiInsights } from '../services/analysisService';
 
-/**
- * ResultsPanel
- *
- * Renders the disease prediction results including:
- *   - EmergencyAdvisoryCard (if red-flag symptoms are present)
- *   - Up to 3 DiseaseScoreCards with confidence tier badges
- *   - AI-generated explanation for the top result
- *
- * Props:
- *   results      ScoredDisease[]  — from scoreEngine.js
- *   redFlags     string[]         — symptom names that triggered emergency advisory
- *   apiKey       string
- *   patientInfo  { age, gender }
- *   onStartOver  () => void
- */
-export default function ResultsPanel({ results, redFlags, apiKey, patientInfo, onStartOver }) {
-  const [explanation, setExplanation] = useState(null);
-  const [loadingExplanation, setLoadingExplanation] = useState(false);
-  const [explanationError, setExplanationError] = useState(null);
+const confidenceStyles = {
+  High: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-950/40 dark:text-emerald-200',
+  Moderate:
+    'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-200',
+  Low: 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200',
+};
 
-  const topResult = results?.[0] ?? null;
+export default function ResultsPanel({
+  analysis,
+  patient,
+  token,
+  onStartOver,
+  onUnauthorized,
+}) {
+  const [insightState, setInsightState] = useState({
+    loading: false,
+    error: null,
+    payload: null,
+  });
+
+  const topResult = analysis?.results?.[0] || null;
 
   useEffect(() => {
-    async function loadExplanation() {
-      setLoadingExplanation(true);
-      setExplanationError(null);
-      setExplanation(null);
+    if (!topResult || !token) {
+      return undefined;
+    }
+
+    const controller = new AbortController();
+
+    async function loadInsight() {
+      setInsightState({
+        loading: true,
+        error: null,
+        payload: null,
+      });
+
       try {
-        const text = await generateDiseaseExplanation(apiKey, topResult, patientInfo);
-        setExplanation(text);
-      } catch (err) {
-        // Use structured error type if available; fall back to raw message
-        const msg = err.errorType
-          ? errorMessage(err.errorType)
-          : (err.message ?? 'AI explanation failed.');
-        setExplanationError(msg);
-      } finally {
-        setLoadingExplanation(false);
+        const payload = await getAiInsights(
+          {
+            patient,
+            result: {
+              disease: topResult.disease,
+              confidence: topResult.confidence,
+              confidenceLabel: topResult.confidenceLabel,
+              matchedSymptoms: topResult.matchedSymptoms,
+              whySuggested: topResult.explainability.whySuggested,
+            },
+            redFlags: analysis.redFlags.map((entry) => ({
+              symptom: entry.symptom,
+              reason: entry.reason,
+            })),
+          },
+          token,
+          controller.signal
+        );
+
+        setInsightState({
+          loading: false,
+          error: null,
+          payload,
+        });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        if (error.status === 401) {
+          onUnauthorized();
+          return;
+        }
+
+        setInsightState({
+          loading: false,
+          error: error.message,
+          payload: null,
+        });
       }
     }
 
-    if (!topResult) return;
-    if (!apiKey) {
-      setExplanationError(errorMessage(ErrorType.API_KEY_MISSING));
-      return;
-    }
-    loadExplanation();
-  }, [topResult, apiKey, patientInfo]);
+    loadInsight();
 
-  // Confidence tier badge styles
-  const tierConfig = {
-    High:     { bg: 'bg-red-100', text: 'text-red-800', border: 'border-red-200' },
-    Moderate: { bg: 'bg-yellow-100', text: 'text-yellow-800', border: 'border-yellow-200' },
-    Low:      { bg: 'bg-green-100', text: 'text-green-800', border: 'border-green-200' },
-  };
+    return () => controller.abort();
+  }, [analysis.redFlags, onUnauthorized, patient, token, topResult]);
 
-  if (!results || results.length === 0) {
+  if (!analysis?.results?.length) {
     return (
-      <div className="text-center p-10 text-gray-500">
-        <Activity className="h-12 w-12 mx-auto text-gray-300 mb-4" />
-        <p className="font-semibold text-gray-700">No conditions matched your symptom profile.</p>
-        <p className="text-sm mt-1 text-gray-500">
-          This may indicate an unusual symptom combination or insufficient specificity.
-          Please consult a physician.
-        </p>
-        <button
-          onClick={onStartOver}
-          className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-brandBlue hover:underline"
-        >
-          <RefreshCw className="h-4 w-4" /> Start Over
+      <div className="space-y-6 rounded-3xl border border-slate-200/80 bg-white/80 p-8 text-center shadow-sm dark:border-slate-800 dark:bg-slate-950/60">
+        <Activity className="mx-auto h-12 w-12 text-slate-400 dark:text-slate-500" />
+        <div className="space-y-2">
+          <h2 className="text-xl font-semibold text-slate-900 dark:text-white">
+            No conditions were ranked for the submitted symptoms.
+          </h2>
+          <p className="text-sm leading-7 text-slate-600 dark:text-slate-300">
+            Review the selected symptoms, add more clinically specific detail where appropriate, and
+            rerun the analysis. Software output must not replace formal medical evaluation.
+          </p>
+        </div>
+        <button type="button" onClick={onStartOver} className="secondary-button">
+          <RefreshCcw className="h-4 w-4" />
+          Start Over
         </button>
       </div>
     );
   }
 
   return (
-    <div className="w-full space-y-6">
-      {/* Results header */}
-      <div className="flex justify-between items-center">
-        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-          <Stethoscope className="h-5 w-5 text-brandBlue" />
-          Likely Conditions
-        </h2>
-        <button
-          onClick={onStartOver}
-          className="text-sm font-medium text-gray-500 hover:text-brandBlue flex items-center gap-1.5 border border-gray-200 px-3 py-1.5 rounded-lg hover:border-brandBlue transition-colors"
-        >
-          <RefreshCw className="h-3.5 w-3.5" /> Start Over
+    <div className="space-y-8">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brandBlue dark:text-cyan-200">
+            Analysis Results
+          </p>
+          <h2 className="mt-2 flex items-center gap-3 text-2xl font-bold text-brandInk dark:text-white">
+            <Stethoscope className="h-6 w-6 text-brandBlue dark:text-cyan-300" />
+            Ranked Conditions and Evidence
+          </h2>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+            Strategy: <span className="font-semibold">{analysis.summary.modelStrategy}</span>
+            {analysis.cached ? ' and served from cache.' : ' with a fresh backend evaluation.'}
+          </p>
+        </div>
+
+        <button type="button" onClick={onStartOver} className="secondary-button">
+          <RefreshCcw className="h-4 w-4" />
+          Start Over
         </button>
       </div>
 
-      {/* Emergency Advisory Card */}
-      {redFlags && redFlags.length > 0 && (
-        <div
-          role="alert"
-          className="border border-red-300 bg-red-50 rounded-xl p-5"
-        >
-          <div className="flex items-start gap-3">
-            <AlertCircle className="h-6 w-6 text-red-600 flex-shrink-0 mt-0.5" />
+      {analysis.redFlags.length > 0 ? (
+        <div className="rounded-3xl border border-red-200 bg-red-50 p-6 dark:border-red-500/40 dark:bg-red-950/40">
+          <div className="flex items-start gap-4">
+            <ShieldAlert className="mt-1 h-6 w-6 text-red-600 dark:text-red-300" />
             <div>
-              <p className="font-bold text-red-800 text-sm">Emergency Advisory</p>
-              <p className="text-red-700 text-sm mt-1">
-                One or more symptoms you selected may indicate a medical emergency:{' '}
-                <span className="font-semibold">{redFlags.join(', ')}</span>.
+              <h3 className="text-lg font-semibold text-red-700 dark:text-red-200">
+                Emergency Advisory
+              </h3>
+              <p className="mt-2 text-sm leading-7 text-red-700 dark:text-red-200">
+                One or more selected symptoms triggered urgent review rules. Treat the symptoms
+                below as escalation signals rather than waiting on software ranking alone.
               </p>
-              <p className="text-red-700 text-sm mt-2 font-semibold">
-                Call emergency services (112) or proceed to the nearest emergency room immediately.
-                Do not wait for prediction results.
-              </p>
+              <ul className="mt-4 space-y-2 text-sm text-red-700 dark:text-red-200">
+                {analysis.redFlags.map((flag) => (
+                  <li key={flag.code} className="rounded-2xl border border-red-200/70 bg-white/60 px-4 py-3 dark:border-red-500/30 dark:bg-red-950/20">
+                    <span className="font-semibold">{flag.symptom}:</span> {flag.reason}
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* Disease Score Cards */}
-      <div className="grid grid-cols-1 gap-5">
-        {results.map((res, index) => {
-          const isTop = index === 0;
-          const tier = tierConfig[res.confidenceTier] ?? tierConfig.Low;
-
-          return (
-            <div
-              key={`${res.disease}-${index}`}
-              className={`border rounded-xl bg-white overflow-hidden ${
-                isTop
-                  ? 'ring-2 ring-brandBlue shadow-lg'
-                  : 'border-gray-200 shadow-sm'
-              }`}
-            >
-              {/* Card Header */}
-              <div className={`p-5 flex justify-between items-start ${isTop ? 'bg-brandLight' : 'bg-white'}`}>
-                <div>
-                  {isTop && (
-                    <span className="inline-block text-xs font-semibold text-brandBlue uppercase tracking-wider mb-1">
+      <div className="grid gap-6">
+        {analysis.results.map((result, index) => (
+          <article
+            key={`${result.disease}-${index}`}
+            className={`overflow-hidden rounded-3xl border bg-white/85 shadow-sm dark:bg-slate-950/60 ${
+              index === 0
+                ? 'border-brandBlue/40 ring-1 ring-brandBlue/20 dark:border-cyan-400/30'
+                : 'border-slate-200/80 dark:border-slate-800'
+            }`}
+          >
+            <div className="border-b border-slate-200/80 px-6 py-5 dark:border-slate-800">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="space-y-3">
+                  {index === 0 ? (
+                    <span className="inline-flex rounded-full bg-brandBlue/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brandBlue dark:bg-cyan-500/10 dark:text-cyan-200">
                       Top Match
                     </span>
-                  )}
-                  <h3 className="text-lg font-bold text-gray-900">{res.disease}</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    {/* Confidence Tier Badge */}
-                    <span
-                      className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${tier.bg} ${tier.text} ${tier.border}`}
-                    >
-                      {res.confidenceTier} Confidence
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      {res.matchedCount} matching symptom{res.matchedCount !== 1 ? 's' : ''}
-                    </span>
+                  ) : null}
+                  <div>
+                    <h3 className="text-xl font-semibold text-slate-900 dark:text-white">
+                      {result.disease}
+                    </h3>
+                    <p className="mt-2 text-sm leading-7 text-slate-600 dark:text-slate-300">
+                      {result.explainability.whySuggested}
+                    </p>
                   </div>
                 </div>
-                {/* Normalized Score */}
-                <div className="text-right flex-shrink-0 ml-4">
-                  <div className="text-2xl font-black text-brandBlue">
-                    {Math.round(res.normalizedScore * 100)}%
+
+                <div className="text-right">
+                  <div className="text-4xl font-black tracking-tight text-brandBlue dark:text-cyan-300">
+                    {formatPercent(result.confidence)}
                   </div>
-                  <div className="text-xs text-gray-400 uppercase font-semibold">Score</div>
+                  <span
+                    className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${confidenceStyles[result.confidenceLabel]}`}
+                  >
+                    {result.confidenceLabel} Confidence
+                  </span>
                 </div>
               </div>
+            </div>
 
-              {/* Score Bar */}
-              <div className="w-full h-1.5 bg-gray-200">
-                <div
-                  className="h-1.5 bg-brandBlue transition-all duration-300"
-                  style={{ width: `${Math.round(res.normalizedScore * 100)}%` }}
-                />
-              </div>
-
-              {/* Matched Symptoms (top result only) */}
-              {isTop && res.matchedSymptomNames?.length > 0 && (
-                <div className="px-5 pt-4 pb-0">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                    Matched Symptoms
-                  </p>
-                  <div className="flex flex-wrap gap-1.5 mb-4">
-                    {res.matchedSymptomNames.map((s, i) => (
+            <div className="grid gap-6 px-6 py-6 lg:grid-cols-[1.1fr_0.9fr]">
+              <div className="space-y-5">
+                <div>
+                  <p className="label-text">Matched Symptoms</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {result.matchedSymptoms.map((symptom) => (
                       <span
-                        key={i}
-                        className="inline-block px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-brandBlue border border-blue-200"
+                        key={symptom}
+                        className="rounded-full border border-brandBlue/20 bg-brandBlue/10 px-3 py-1 text-xs font-semibold text-brandBlue dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-200"
                       >
-                        {s}
+                        {symptom}
                       </span>
                     ))}
                   </div>
                 </div>
-              )}
 
-              {/* AI Explanation — top result only */}
-              {isTop && (
-                <div className="p-5 border-t border-gray-100">
-                  <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                    <Info className="h-3.5 w-3.5 text-brandBlue" />
-                    AI-Generated Overview (Gemma 4 via NVIDIA NIM)
-                  </h4>
-
-                  {loadingExplanation && (
-                    <div className="flex items-center gap-3 py-4 text-gray-500">
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-brandBlue flex-shrink-0" />
-                      <span className="text-sm">Generating explanation...</span>
-                    </div>
-                  )}
-
-                  {!loadingExplanation && explanationError && (
-                    <div className="p-3 bg-red-50 text-red-700 rounded-lg text-sm border border-red-100 flex items-start gap-2">
-                      <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                      <p>{explanationError}</p>
-                    </div>
-                  )}
-
-                  {!loadingExplanation && !explanationError && explanation && (
-                    <div className="space-y-3">
-                      {explanation.split('\n').map((para, i) =>
-                        para.trim() ? (
-                          <p key={i} className="text-sm text-gray-700 leading-relaxed">
-                            {para}
+                <div>
+                  <p className="label-text">Top Contributors</p>
+                  <div className="mt-3 space-y-3">
+                    {result.explainability.topContributors.map((item) => (
+                      <div
+                        key={`${result.disease}-${item.symptom}`}
+                        className="rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-900/70"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                            {item.label}
                           </p>
-                        ) : null
-                      )}
-                      {/* Hardcoded disclaimer appended at component layer — always visible */}
-                      <p className="text-xs text-gray-400 border-t border-gray-100 pt-3 mt-3">
-                        The above information is AI-generated and is provided for informational
-                        context only. It does not constitute a medical diagnosis or treatment
-                        recommendation.
+                          <span className="text-xs font-semibold text-brandBlue dark:text-cyan-300">
+                            {formatPercent(item.shareOfEvidence)}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs leading-6 text-slate-500 dark:text-slate-400">
+                          Severity {item.severity}/5, duration {item.durationDays} days, weight{' '}
+                          {item.weight.toFixed(1)}, multiplier {item.durationMultiplier.toFixed(1)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-5">
+                <div className="rounded-3xl border border-slate-200/80 bg-slate-50/80 p-5 dark:border-slate-800 dark:bg-slate-900/70">
+                  <p className="label-text">Coverage Metrics</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-2xl bg-white/80 p-4 dark:bg-slate-950/60">
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                        Input Coverage
+                      </p>
+                      <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">
+                        {formatPercent(result.coverage.inputCoverage)}
                       </p>
                     </div>
-                  )}
+                    <div className="rounded-2xl bg-white/80 p-4 dark:bg-slate-950/60">
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                        Disease Coverage
+                      </p>
+                      <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">
+                        {formatPercent(result.coverage.diseaseCoverage)}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-              )}
+
+                {result.explainability.missingReportedSymptoms.length > 0 ? (
+                  <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-500/30 dark:bg-amber-950/30">
+                    <p className="label-text text-amber-700 dark:text-amber-200">
+                      Reported Symptoms Not Used for This Match
+                    </p>
+                    <p className="mt-3 text-sm leading-7 text-amber-700 dark:text-amber-200">
+                      {result.explainability.missingReportedSymptoms.join(', ')}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
             </div>
-          );
-        })}
+          </article>
+        ))}
       </div>
 
-      {/* Inline per-result disclaimer */}
-      <p className="text-xs text-gray-400 text-center leading-relaxed">
-        Results are generated by a weighted symptom-matching algorithm and do not constitute a
-        medical diagnosis. Confidence scores reflect symptom overlap, not diagnostic certainty.
-        Consult a licensed physician for evaluation.
-      </p>
+      <section className="rounded-3xl border border-slate-200/80 bg-white/85 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-950/60">
+        <div className="flex items-center gap-3">
+          <BrainCircuit className="h-5 w-5 text-brandBlue dark:text-cyan-300" />
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+            AI Clinical Communication Layer
+          </h3>
+        </div>
+
+        {insightState.loading ? (
+          <div className="mt-5 flex items-center gap-3 text-sm text-slate-600 dark:text-slate-300">
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-brandBlue border-t-transparent" />
+            Generating a server-side educational insight for the top-ranked condition...
+          </div>
+        ) : insightState.error ? (
+          <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-950/40 dark:text-red-200">
+            {insightState.error}
+          </div>
+        ) : insightState.payload ? (
+          <div className="mt-5 space-y-4">
+            <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+              <span className="rounded-full border border-slate-200 px-3 py-1 dark:border-slate-700">
+                Provider {insightState.payload.provider}
+              </span>
+              <span className="rounded-full border border-slate-200 px-3 py-1 dark:border-slate-700">
+                Model {insightState.payload.model}
+              </span>
+            </div>
+            <div className="rounded-3xl border border-slate-200/80 bg-slate-50/80 p-5 dark:border-slate-800 dark:bg-slate-900/70">
+              {insightState.payload.insight.split('\n').map((paragraph, index) =>
+                paragraph.trim() ? (
+                  <p
+                    key={index}
+                    className="mb-4 text-sm leading-7 text-slate-700 last:mb-0 dark:text-slate-200"
+                  >
+                    {paragraph}
+                  </p>
+                ) : null
+              )}
+            </div>
+            <p className="text-xs leading-6 text-slate-500 dark:text-slate-400">
+              AI-generated text is informational only and must not be treated as a diagnosis,
+              treatment plan, or emergency triage instruction.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
+            AI insight is not yet available for the current result.
+          </div>
+        )}
+      </section>
+
+      <div className="rounded-3xl border border-slate-200/80 bg-slate-50/80 px-5 py-4 text-sm leading-7 text-slate-600 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300">
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="mt-1 h-5 w-5 text-amber-500 dark:text-amber-300" />
+          <p>
+            SymptomSense ranks conditions by symptom overlap and weighted evidence. It is not a
+            clinically validated diagnostic device and must be used only as an informational aid by
+            qualified adults.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

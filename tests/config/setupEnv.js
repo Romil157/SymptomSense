@@ -1,0 +1,11 @@
+process.env.NODE_ENV = 'test';
+process.env.PORT = '4000';
+process.env.CLIENT_ORIGIN = 'http://127.0.0.1:4173,http://localhost:5173';
+process.env.JWT_SECRET = 'symptomsense-test-secret-key';
+process.env.JWT_EXPIRES_IN = '8h';
+process.env.AUTH_EMAIL = 'clinician@symptomsense.local';
+process.env.AUTH_PASSWORD = 'StrongPassword123!';
+process.env.AI_PROVIDER = 'fallback';
+process.env.ANALYSIS_CACHE_TTL_MS = '1000';
+process.env.AI_CACHE_TTL_MS = '1000';
+process.env.AUDIT_LOG_FILE = 'backend/logs/test-audit.log';

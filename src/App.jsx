@@ -1,395 +1,537 @@
-import React, { useState, useEffect } from 'react';
-import { Activity, Settings, Settings2, AlertTriangle } from 'lucide-react';
-import SymptomSelector from './components/SymptomSelector';
-import ResultsPanel from './components/ResultsPanel';
-import PatientInfoForm from './components/PatientInfoForm';
-import { parseCSV } from './utils/csvParser';
-import { scoreSymptoms } from './utils/scoreEngine';
-import { errorMessage } from './utils/errors.js';
-import { sanitizePatientInfo } from './utils/sanitize.js';
+import {
+  Activity,
+  AlertTriangle,
+  ClipboardPlus,
+  LogOut,
+  ShieldCheck,
+  Sparkles,
+} from 'lucide-react';
+import {
+  Suspense,
+  lazy,
+  startTransition,
+  useEffect,
+  useState,
+} from 'react';
+import AuthGate from './components/AuthGate';
+import DarkModeToggle from './components/DarkModeToggle';
+import { useAuthSession } from './hooks/useAuthSession';
+import { useTheme } from './hooks/useTheme';
+import { symptomSelectionSchema } from './lib/validation';
+import { analyzeSymptoms, getSymptomCatalog } from './services/analysisService';
+import { secureStorage } from './services/secureStorage';
 
-// Disclaimer acceptance persisted across sessions.
-// Changing the version string resets acceptance for all users.
-const DISCLAIMER_VERSION_KEY = 'symptomsense_disclaimer_v1';
+const PatientInfoForm = lazy(() => import('./components/PatientInfoForm'));
+const ResultsPanel = lazy(() => import('./components/ResultsPanel'));
+const SymptomSelector = lazy(() => import('./components/SymptomSelector'));
+
+const DISCLAIMER_STORAGE_KEY = 'disclaimer';
+
+const steps = [
+  { id: 1, label: 'Patient Profile' },
+  { id: 2, label: 'Symptoms' },
+  { id: 3, label: 'Results' },
+];
+
+const suspenseFallback = (
+  <div className="rounded-3xl border border-slate-200/80 bg-white/80 px-6 py-8 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-300">
+    Loading workflow component...
+  </div>
+);
 
 function App() {
+  const { session, isHydrating, authError, login, logout, clearAuthError } = useAuthSession();
+  const { theme, isThemeReady, toggleTheme } = useTheme();
+
+  const [disclaimerAccepted, setDisclaimerAccepted] = useState(false);
+  const [isPreferenceReady, setIsPreferenceReady] = useState(false);
   const [step, setStep] = useState(1);
-  const [apiKey, setApiKey] = useState(localStorage.getItem('nvidia_api_key') || '');
-  const [showSettings, setShowSettings] = useState(false);
-  const [disclaimerAccepted, setDisclaimerAccepted] = useState(
-    () => localStorage.getItem(DISCLAIMER_VERSION_KEY) === 'accepted'
-  );
-
-  const [allSymptoms, setAllSymptoms] = useState([]);
-  const [dataset, setDataset] = useState([]);
-  const [loadingDataset, setLoadingDataset] = useState(true);
-  const [datasetError, setDatasetError] = useState(null);
-
-  // Each entry: { name: string, severity: number (1–5), duration: number (days) }
+  const [patient, setPatient] = useState({ age: '', sex: '' });
+  const [catalog, setCatalog] = useState([]);
+  const [catalogState, setCatalogState] = useState({
+    loading: false,
+    error: null,
+  });
   const [selectedSymptoms, setSelectedSymptoms] = useState([]);
+  const [symptomError, setSymptomError] = useState(null);
+  const [analysis, setAnalysis] = useState(null);
+  const [analysisState, setAnalysisState] = useState({
+    loading: false,
+    error: null,
+  });
+  const [loginPending, setLoginPending] = useState(false);
 
-  const [results, setResults] = useState([]);
-  const [redFlags, setRedFlags] = useState([]);
-  const [patientInfo, setPatientInfo] = useState({ age: '', gender: '' });
-
-  // Load dataset on mount
   useEffect(() => {
-    const loadData = async () => {
+    let isMounted = true;
+
+    async function hydratePreferenceState() {
       try {
-        setLoadingDataset(true);
-        setDatasetError(null);
-        const { dataset: ds, allSymptoms: symptoms } = await parseCSV('/cleaned_dataset.csv');
-        setDataset(ds);
-        setAllSymptoms(symptoms);
-      } catch (err) {
-        const msg = errorMessage(err.errorType) ?? err.message ?? 'Failed to load dataset.';
-        setDatasetError(msg);
-        console.error('[SymptomSense] Dataset load error:', err);
+        const accepted = await secureStorage.getItem(DISCLAIMER_STORAGE_KEY);
+        if (isMounted) {
+          setDisclaimerAccepted(Boolean(accepted));
+        }
       } finally {
-        setLoadingDataset(false);
+        if (isMounted) {
+          setIsPreferenceReady(true);
+        }
       }
+    }
+
+    hydratePreferenceState();
+
+    return () => {
+      isMounted = false;
     };
-    loadData();
   }, []);
 
-  // --- Handlers ---
-
-  const acceptDisclaimer = () => {
-    localStorage.setItem(DISCLAIMER_VERSION_KEY, 'accepted');
-    setDisclaimerAccepted(true);
-  };
-
-  const saveApiKey = (e) => {
-    e.preventDefault();
-    localStorage.setItem('nvidia_api_key', apiKey);
-    setShowSettings(false);
-  };
-
-  const handlePatientInfoComplete = (info) => {
-    try {
-      // Validate and cast before storing — prevents prompt injection via age/gender
-      const sanitized = sanitizePatientInfo(info);
-      setPatientInfo(sanitized);
-      setStep(2);
-    } catch (err) {
-      // PatientInfoForm already validates ranges, but sanitize is a second gate.
-      console.error('[SymptomSense] Patient info validation failed:', err.message);
+  async function handleCatalogReload() {
+    if (!session?.token) {
+      return;
     }
-  };
 
-  /**
-   * Add a new symptom entry with default severity and duration.
-   * Prevents duplicates.
-   */
-  const handleAddSymptom = (name) => {
-    if (selectedSymptoms.some(s => s.name === name)) return;
-    setSelectedSymptoms(prev => [...prev, { name, severity: 3, duration: 1 }]);
-  };
+    setCatalogState({
+      loading: true,
+      error: null,
+    });
 
-  /**
-   * Update the severity or duration of an existing symptom entry.
-   */
-  const handleUpdateSymptom = (name, field, value) => {
-    setSelectedSymptoms(prev =>
-      prev.map(s => s.name === name ? { ...s, [field]: value } : s)
-    );
-  };
+    try {
+      const payload = await getSymptomCatalog(session.token);
+      setCatalog(payload.symptoms);
+      setCatalogState({
+        loading: false,
+        error: null,
+      });
+    } catch (error) {
+      if (error.status === 401) {
+        await logout();
+        return;
+      }
 
-  const handleRemoveSymptom = (name) => {
-    setSelectedSymptoms(prev => prev.filter(s => s.name !== name));
-  };
+      setCatalogState({
+        loading: false,
+        error: error.message,
+      });
+    }
+  }
 
-  /**
-   * Run the weighted scoring engine and navigate to results.
-   */
-  const handleCheckSymptoms = () => {
-    const { results: scored, redFlags: flags } = scoreSymptoms(selectedSymptoms, dataset);
-    setResults(scored);
-    setRedFlags(flags);
-    setStep(3);
-  };
+  useEffect(() => {
+    if (session?.token) {
+      let isMounted = true;
 
-  const handleStartOver = () => {
+      async function loadCatalog() {
+        setCatalogState({
+          loading: true,
+          error: null,
+        });
+
+        try {
+          const payload = await getSymptomCatalog(session.token);
+          if (!isMounted) {
+            return;
+          }
+
+          setCatalog(payload.symptoms);
+          setCatalogState({
+            loading: false,
+            error: null,
+          });
+        } catch (error) {
+          if (!isMounted) {
+            return;
+          }
+
+          if (error.status === 401) {
+            await logout();
+            return;
+          }
+
+          setCatalogState({
+            loading: false,
+            error: error.message,
+          });
+        }
+      }
+
+      loadCatalog();
+
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    setCatalog([]);
     setSelectedSymptoms([]);
-    setResults([]);
-    setRedFlags([]);
-    // Return to symptom selection, keep patient info
-    setStep(2);
-  };
+    setAnalysis(null);
+    setStep(1);
+  }, [session?.token, logout]);
 
-  const canSubmit = selectedSymptoms.length > 0;
+  async function handleLogin(credentials) {
+    setLoginPending(true);
+
+    try {
+      await login(credentials);
+    } finally {
+      setLoginPending(false);
+    }
+  }
+
+  async function handleAcceptDisclaimer() {
+    await secureStorage.setItem(DISCLAIMER_STORAGE_KEY, true);
+    setDisclaimerAccepted(true);
+  }
+
+  function handlePatientComplete(nextPatient) {
+    setPatient(nextPatient);
+    setStep(2);
+  }
+
+  function handleAddSymptom(symptom) {
+    if (selectedSymptoms.some((entry) => entry.name === symptom.name)) {
+      return;
+    }
+
+    setSelectedSymptoms((current) => [
+      ...current,
+      {
+        name: symptom.name,
+        label: symptom.label,
+        severity: 3,
+        durationDays: 1,
+      },
+    ]);
+    setSymptomError(null);
+  }
+
+  function handleUpdateSymptom(name, field, value) {
+    setSelectedSymptoms((current) =>
+      current.map((entry) => (entry.name === name ? { ...entry, [field]: value } : entry))
+    );
+  }
+
+  function handleRemoveSymptom(name) {
+    setSelectedSymptoms((current) => current.filter((entry) => entry.name !== name));
+  }
+
+  async function handleAnalyze() {
+    const validation = symptomSelectionSchema.safeParse(selectedSymptoms);
+
+    if (!validation.success) {
+      setSymptomError(validation.error.issues[0]?.message || 'Select at least one symptom.');
+      return;
+    }
+
+    setSymptomError(null);
+    setAnalysisState({
+      loading: true,
+      error: null,
+    });
+
+    try {
+      const payload = await analyzeSymptoms(
+        {
+          patient,
+          symptoms: selectedSymptoms.map((symptom) => ({
+            name: symptom.name,
+            severity: symptom.severity,
+            durationDays: symptom.durationDays,
+          })),
+        },
+        session.token
+      );
+
+      startTransition(() => {
+        setAnalysis(payload);
+        setStep(3);
+      });
+
+      setAnalysisState({
+        loading: false,
+        error: null,
+      });
+    } catch (error) {
+      if (error.status === 401) {
+        await logout();
+        return;
+      }
+
+      setAnalysisState({
+        loading: false,
+        error: error.message,
+      });
+    }
+  }
+
+  function handleStartOver() {
+    setAnalysis(null);
+    setSelectedSymptoms([]);
+    setStep(2);
+  }
+
+  if (!isThemeReady || !isPreferenceReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-6">
+        <div className="panel-card max-w-xl text-center">
+          <Activity className="mx-auto h-10 w-10 animate-pulse text-brandBlue dark:text-cyan-300" />
+          <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">
+            Preparing the secure SymptomSense workspace...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col font-sans">
-
-      {/* Disclaimer Overlay */}
-      {!disclaimerAccepted && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900 bg-opacity-80">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 p-8">
-            <div className="flex items-center gap-3 mb-4">
-              <Activity className="h-7 w-7 text-brandBlue flex-shrink-0" />
-              <h2 className="text-xl font-bold text-gray-900">Important Notice</h2>
+    <div className="min-h-screen">
+      {!disclaimerAccepted && session ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 backdrop-blur-md">
+          <div className="panel-card max-w-2xl">
+            <div className="flex items-center gap-3">
+              <ShieldCheck className="h-6 w-6 text-brandBlue dark:text-cyan-300" />
+              <h2 className="text-xl font-semibold text-slate-900 dark:text-white">
+                Clinical Safety Notice
+              </h2>
             </div>
-            <div className="text-sm text-gray-700 space-y-3 overflow-y-auto max-h-60 pr-1">
+            <div className="mt-5 space-y-4 text-sm leading-7 text-slate-600 dark:text-slate-300">
               <p>
-                SymptomSense is an educational tool designed to help you understand possible
-                conditions based on the symptoms you report. It is not a medical diagnostic device.
+                SymptomSense is an informational screening aid. It is not a medically validated
+                diagnostic device and must not be used to delay emergency care, specialist review,
+                or clinician judgment.
               </p>
               <p>
-                The predictions made by this system are based on symptom-matching algorithms
-                and publicly available health data. They are not reviewed, verified, or endorsed
-                by licensed medical professionals.
+                Disease rankings are produced by weighted symptom overlap. AI-generated text is
+                strictly explanatory and may be incomplete or incorrect.
               </p>
               <p>
-                <strong>Do not use SymptomSense to delay seeking medical care.</strong> If you
-                believe you are experiencing a medical emergency, call emergency services (112)
-                or proceed to the nearest emergency room immediately.
-              </p>
-              <p>
-                By continuing, you confirm that you understand this tool is for informational
-                purposes only and you will consult a licensed physician for any health concerns.
+                If symptoms suggest an emergency, seek in-person assessment immediately rather than
+                waiting for software output.
               </p>
             </div>
-            <div className="mt-6">
-              <button
-                id="disclaimer-accept"
-                onClick={acceptDisclaimer}
-                className="w-full py-3 bg-brandBlue text-white font-bold rounded-full hover:bg-blue-700 transition-colors text-sm"
-              >
-                I Understand — Continue
-              </button>
-            </div>
+            <button
+              type="button"
+              id="disclaimer-accept"
+              onClick={handleAcceptDisclaimer}
+              className="primary-button mt-6"
+            >
+              I Understand and Accept
+            </button>
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* Sticky Navbar */}
-      <nav className="sticky top-0 z-40 bg-white shadow-sm border-b border-gray-100">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center gap-6">
-              <div className="flex items-center gap-2 text-brandBlue">
-                <Activity className="h-7 w-7" />
-                <span className="font-bold text-xl tracking-tight text-gray-900">SymptomSense</span>
-              </div>
-              <span className="hidden md:block text-sm text-gray-400 border-l border-gray-200 pl-6">
-                Understand your symptoms. Not a replacement for a doctor.
-              </span>
+      <header className="sticky top-0 z-40 border-b border-white/40 bg-white/70 backdrop-blur-xl dark:border-slate-900/70 dark:bg-slate-950/70">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-3">
+            <div className="rounded-2xl bg-brandBlue/10 p-3 text-brandBlue dark:bg-cyan-500/10 dark:text-cyan-200">
+              <Activity className="h-6 w-6" />
             </div>
-            <div className="flex items-center">
-              <button
-                id="settings-toggle"
-                onClick={() => setShowSettings(true)}
-                className="text-gray-500 hover:text-brandBlue p-2 rounded-full hover:bg-gray-100 transition-colors"
-                title="API Settings"
-              >
-                <Settings className="h-5 w-5" />
-              </button>
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brandBlue dark:text-cyan-200">
+                SymptomSense
+              </p>
+              <h1 className="font-display text-2xl font-bold text-brandInk dark:text-white">
+                Secure Symptom Triage
+              </h1>
             </div>
           </div>
-        </div>
-      </nav>
 
-      {/* Step Indicator */}
-      {disclaimerAccepted && (
-        <div className="bg-white border-b border-gray-100">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6 py-3">
-            <div className="flex items-center gap-4">
-              {[
-                { n: 1, label: 'Patient Profile' },
-                { n: 2, label: 'Symptoms' },
-                { n: 3, label: 'Results' },
-              ].map(({ n, label }) => (
-                <div key={n} className="flex items-center gap-2">
-                  <div
-                    className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold ${
-                      step >= n
-                        ? 'bg-brandBlue text-white'
-                        : 'bg-gray-200 text-gray-400'
-                    }`}
-                  >
-                    {n}
-                  </div>
-                  <span
-                    className={`text-xs font-medium ${
-                      step >= n ? 'text-gray-800' : 'text-gray-400'
-                    }`}
-                  >
-                    {label}
-                  </span>
-                  {n < 3 && <div className="h-px w-8 bg-gray-200" />}
+          <div className="flex flex-wrap items-center gap-3">
+            <DarkModeToggle theme={theme} onToggle={toggleTheme} />
+            {session ? (
+              <>
+                <div className="rounded-full border border-slate-200/80 bg-white/80 px-4 py-2 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200">
+                  Signed in as <span className="font-semibold">{session.user.email}</span>
                 </div>
-              ))}
-            </div>
+                <button type="button" onClick={logout} className="secondary-button">
+                  <LogOut className="h-4 w-4" />
+                  Sign Out
+                </button>
+              </>
+            ) : null}
           </div>
         </div>
-      )}
+      </header>
 
-      {/* Main Content */}
-      <main className="flex-grow w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-
-        {/* Settings Modal */}
-        {showSettings && (
-          <div
-            className="fixed inset-0 z-50 overflow-y-auto"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="settings-modal-title"
-          >
-            <div className="flex items-center justify-center min-h-screen px-4">
-              <div
-                className="fixed inset-0 bg-gray-500 bg-opacity-75"
-                onClick={() => setShowSettings(false)}
-              />
-              <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-6 z-10">
-                <form onSubmit={saveApiKey}>
-                  <div className="flex items-center gap-3 mb-2">
-                    <Settings2 className="h-5 w-5 text-brandBlue" />
-                    <h3 id="settings-modal-title" className="text-lg font-semibold text-gray-900">
-                      API Settings
-                    </h3>
+      <main className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
+        {!session ? (
+          <AuthGate
+            isHydrating={isHydrating}
+            isSubmitting={loginPending}
+            error={authError}
+            onSubmit={async (credentials) => {
+              clearAuthError();
+              await handleLogin(credentials);
+            }}
+          />
+        ) : (
+          <>
+            <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+              <div className="panel-card">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="space-y-4">
+                    <span className="inline-flex items-center gap-2 rounded-full bg-brandBlue/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-brandBlue dark:bg-cyan-500/10 dark:text-cyan-200">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Production Workflow
+                    </span>
+                    <h2 className="text-3xl font-bold tracking-tight text-brandInk dark:text-white">
+                      Server-side triage with structured explainability
+                    </h2>
+                    <p className="max-w-3xl text-sm leading-7 text-slate-600 dark:text-slate-300">
+                      The frontend now loads the symptom catalog from the backend, authenticates via
+                      JWT, encrypts client-side session state with Web Crypto, and renders
+                      explainable results produced by the backend scoring engine.
+                    </p>
                   </div>
-                  <p className="text-sm text-gray-500 mb-4">
-                    SymptomSense uses the <strong>NVIDIA NIM API</strong> with the{' '}
-                    <strong>Google Gemma 4 (31B)</strong> model to generate disease explanations.
-                    Your key is stored only in your browser and is never sent to our servers.
-                    Get a free key at{' '}
-                    <a
-                      href="https://build.nvidia.com"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-brandBlue underline"
-                    >
-                      build.nvidia.com
-                    </a>.
-                  </p>
-                  <input
-                    id="api-key-input"
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="nvapi-..."
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brandBlue focus:border-brandBlue"
-                  />
-                  <div className="mt-4 flex justify-end gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setShowSettings(false)}
-                      className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="px-4 py-2 text-sm font-medium text-white bg-brandBlue rounded-lg hover:bg-blue-700 transition-colors"
-                    >
-                      Save Key
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          </div>
-        )}
 
-        <div className="bg-white shadow-xl rounded-2xl overflow-hidden border border-gray-100">
-          <div className="p-8">
-            {loadingDataset ? (
-              <div className="flex flex-col items-center justify-center py-20 gap-4">
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-brandBlue" />
-                <p className="text-sm text-gray-500">Loading symptom dataset...</p>
-              </div>
-            ) : datasetError ? (
-              <div className="flex flex-col items-center justify-center py-20 gap-4 text-center">
-                <AlertTriangle className="h-10 w-10 text-red-400" />
-                <p className="font-semibold text-gray-800">Dataset failed to load</p>
-                <p className="text-sm text-gray-500 max-w-sm">{datasetError}</p>
-                <button
-                  onClick={() => window.location.reload()}
-                  className="mt-2 px-6 py-2 bg-brandBlue text-white text-sm font-semibold rounded-full hover:bg-blue-700 transition-colors"
-                >
-                  Retry
-                </button>
-              </div>
-            ) : (
-              <div>
-                {/* Step 1 — Patient Info */}
-                {step === 1 && (
-                  <PatientInfoForm onComplete={handlePatientInfoComplete} />
-                )}
-
-                {/* Step 2 — Symptom Selection */}
-                {step === 2 && (
-                  <div>
-                    <div className="mb-8 text-center">
-                      <h1 className="text-2xl font-extrabold text-gray-900 mb-2">
-                        Select Your Symptoms
-                      </h1>
-                      <p className="text-gray-500 text-sm">
-                        Search and select all symptoms you are currently experiencing. Rate
-                        each by severity and how long you have had it.
-                      </p>
+                  <div className="grid gap-3 text-sm text-slate-600 dark:text-slate-300">
+                    <div className="rounded-2xl bg-white/70 px-4 py-3 shadow-sm dark:bg-slate-900/70">
+                      <p className="font-semibold text-slate-900 dark:text-white">Step {step} of 3</p>
+                      <p>Patient intake, symptom capture, and ranked output.</p>
                     </div>
+                    <div className="rounded-2xl bg-white/70 px-4 py-3 shadow-sm dark:bg-slate-900/70">
+                      <p className="font-semibold text-slate-900 dark:text-white">Catalog Size</p>
+                      <p>{catalog.length || 0} backend-driven symptoms loaded.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-                    <SymptomSelector
-                      allSymptoms={allSymptoms}
-                      selectedSymptoms={selectedSymptoms}
-                      onAddSymptom={handleAddSymptom}
-                      onUpdateSymptom={handleUpdateSymptom}
-                      onRemoveSymptom={handleRemoveSymptom}
-                    />
-
-                    <div className="mt-10 pt-6 border-t border-gray-100 text-center">
-                      <button
-                        id="check-symptoms-btn"
-                        onClick={handleCheckSymptoms}
-                        disabled={!canSubmit}
-                        className={`w-full md:w-auto px-10 py-4 rounded-full font-bold text-base shadow-md transition-all ${
-                          canSubmit
-                            ? 'bg-brandBlue text-white hover:bg-blue-700 hover:scale-105'
-                            : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              <div className="panel-card">
+                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brandBlue dark:text-cyan-200">
+                  Workflow Status
+                </p>
+                <div className="mt-5 space-y-4">
+                  {steps.map((entry) => (
+                    <div key={entry.id} className="flex items-center gap-3">
+                      <div
+                        className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-bold ${
+                          step >= entry.id
+                            ? 'bg-brandBlue text-white'
+                            : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
                         }`}
                       >
-                        Analyze Symptoms
+                        {entry.id}
+                      </div>
+                      <span
+                        className={`text-sm font-medium ${
+                          step >= entry.id
+                            ? 'text-slate-900 dark:text-white'
+                            : 'text-slate-500 dark:text-slate-400'
+                        }`}
+                      >
+                        {entry.label}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <section className="panel-card">
+              {catalogState.error ? (
+                <div className="rounded-3xl border border-red-200 bg-red-50 p-5 dark:border-red-500/40 dark:bg-red-950/40">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="mt-1 h-5 w-5 text-red-600 dark:text-red-300" />
+                    <div>
+                      <h2 className="text-lg font-semibold text-red-700 dark:text-red-200">
+                        Symptom catalog unavailable
+                      </h2>
+                      <p className="mt-2 text-sm leading-7 text-red-700 dark:text-red-200">
+                        {catalogState.error}
+                      </p>
+                      <button
+                        type="button"
+                        className="secondary-button mt-4"
+                        onClick={handleCatalogReload}
+                      >
+                        Retry Catalog Load
                       </button>
-                      {!canSubmit && (
-                        <p className="text-xs text-gray-400 mt-2">
-                          Select at least one symptom to continue.
-                        </p>
-                      )}
                     </div>
                   </div>
-                )}
+                </div>
+              ) : (
+                <Suspense fallback={suspenseFallback}>
+                  {step === 1 ? (
+                    <PatientInfoForm initialValue={patient} onComplete={handlePatientComplete} />
+                  ) : null}
 
-                {/* Step 3 — Results */}
-                {step === 3 && (
-                  <ResultsPanel
-                    results={results}
-                    redFlags={redFlags}
-                    apiKey={apiKey}
-                    patientInfo={patientInfo}
-                    onStartOver={handleStartOver}
-                  />
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+                  {step === 2 ? (
+                    <div className="space-y-8">
+                      <div className="space-y-3">
+                        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brandBlue dark:text-cyan-200">
+                          Symptom Selection
+                        </p>
+                        <h2 className="text-3xl font-bold tracking-tight text-brandInk dark:text-white">
+                          Build the symptom profile
+                        </h2>
+                        <p className="max-w-2xl text-sm leading-7 text-slate-600 dark:text-slate-300">
+                          Search the backend catalog, add every active symptom, and rate severity
+                          and duration to drive the weighted scoring engine.
+                        </p>
+                      </div>
+
+                      {catalogState.loading ? (
+                        <div className="rounded-3xl border border-slate-200/80 bg-white/80 px-6 py-8 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-300">
+                          Loading the backend symptom catalog...
+                        </div>
+                      ) : (
+                        <SymptomSelector
+                          catalog={catalog}
+                          selectedSymptoms={selectedSymptoms}
+                          onAddSymptom={handleAddSymptom}
+                          onUpdateSymptom={handleUpdateSymptom}
+                          onRemoveSymptom={handleRemoveSymptom}
+                          validationError={symptomError}
+                        />
+                      )}
+
+                      {analysisState.error ? (
+                        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-950/40 dark:text-red-200">
+                          {analysisState.error}
+                        </div>
+                      ) : null}
+
+                      <div className="flex flex-wrap items-center gap-4 border-t border-slate-200 pt-6 dark:border-slate-800">
+                        <button
+                          type="button"
+                          id="check-symptoms-btn"
+                          disabled={analysisState.loading || catalogState.loading}
+                          onClick={handleAnalyze}
+                          className="primary-button"
+                        >
+                          <ClipboardPlus className="h-4 w-4" />
+                          {analysisState.loading ? 'Analyzing Symptoms...' : 'Analyze Symptoms'}
+                        </button>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">
+                          Results are generated by the backend scoring engine and may be cached for
+                          repeated identical requests.
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {step === 3 && analysis ? (
+                    <ResultsPanel
+                      analysis={analysis}
+                      patient={patient}
+                      token={session.token}
+                      onStartOver={handleStartOver}
+                      onUnauthorized={logout}
+                    />
+                  ) : null}
+                </Suspense>
+              )}
+            </section>
+          </>
+        )}
       </main>
 
-      {/* Footer */}
-      <footer className="mt-auto bg-gray-900 text-gray-400 py-6">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-sm">
-          <p className="flex items-center justify-center gap-2 mb-2 font-medium text-gray-300">
-            <Activity className="h-4 w-4" /> SymptomSense
-          </p>
-          <p className="text-xs">
-            <strong className="text-gray-300">Disclaimer:</strong> This tool is for informational
-            purposes only. It is not a substitute for professional medical advice, diagnosis, or
-            treatment. Always consult a qualified physician for any health concerns.
-          </p>
-          <p className="mt-2 text-xs text-gray-600">
-            If you are experiencing a medical emergency, call emergency services immediately.
+      <footer className="border-t border-white/40 bg-white/70 py-6 backdrop-blur-xl dark:border-slate-900/70 dark:bg-slate-950/70">
+        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 text-sm text-slate-600 sm:px-6 lg:px-8 dark:text-slate-300">
+          <p className="font-semibold text-slate-900 dark:text-white">Medical Disclaimer</p>
+          <p>
+            SymptomSense is provided for informational screening support only. It does not provide
+            diagnosis, treatment, or emergency clearance. Always refer urgent or uncertain cases to
+            qualified medical professionals.
           </p>
         </div>
       </footer>

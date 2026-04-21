@@ -1,79 +1,107 @@
-import React, { useState } from 'react';
-import { User, Calendar } from 'lucide-react';
+import { Calendar, UserRound } from 'lucide-react';
+import { useState } from 'react';
+import { patientSchema, validateForm } from '../lib/validation';
 
-const PatientInfoForm = ({ onComplete }) => {
-  const [age, setAge] = useState('');
-  const [gender, setGender] = useState('');
+const sexOptions = [
+  { value: 'male', label: 'Male' },
+  { value: 'female', label: 'Female' },
+  { value: 'other', label: 'Other' },
+  { value: 'prefer_not_to_say', label: 'Prefer not to say' },
+];
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (age && gender) {
-      onComplete({ age, gender });
+export default function PatientInfoForm({ initialValue, onComplete }) {
+  const [form, setForm] = useState({
+    age: initialValue?.age ?? '',
+    sex: initialValue?.sex ?? '',
+  });
+  const [errors, setErrors] = useState({});
+
+  function handleSubmit(event) {
+    event.preventDefault();
+    const validation = validateForm(patientSchema, form);
+
+    if (!validation.success) {
+      setErrors(validation.errors);
+      return;
     }
-  };
+
+    setErrors({});
+    onComplete(validation.data);
+  }
 
   return (
-    <div className="max-w-md mx-auto bg-white">
-      <div className="text-center mb-10">
-        <h1 className="text-3xl font-extrabold text-gray-900 mb-4">
-          Tell us about yourself
+    <section className="space-y-8">
+      <div className="space-y-3">
+        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brandBlue dark:text-cyan-200">
+          Patient Intake
+        </p>
+        <h1 className="text-3xl font-bold tracking-tight text-brandInk dark:text-white">
+          Capture patient context before triage
         </h1>
-        <p className="text-lg text-gray-500">
-          This helps us provide more accurate predictions and tailored medical explanations.
+        <p className="max-w-2xl text-sm leading-7 text-slate-600 dark:text-slate-300">
+          Age and biological sex are used to structure the symptom review and the educational
+          insight returned by the backend. They do not replace clinician judgment or formal
+          diagnostic evaluation.
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-brandBlue" /> Age
+      <form className="grid gap-6 md:grid-cols-2" onSubmit={handleSubmit}>
+        <div className="rounded-3xl border border-slate-200/70 bg-white/80 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-950/60">
+          <label className="label-text flex items-center gap-2" htmlFor="patient-age">
+            <Calendar className="h-4 w-4 text-brandBlue dark:text-cyan-300" />
+            Age
           </label>
           <input
+            id="patient-age"
             type="number"
             min="0"
             max="120"
-            required
-            value={age}
-            onChange={(e) => setAge(e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brandBlue focus:border-brandBlue transition-all outline-none"
-            placeholder="e.g. 34"
+            className="input-shell mt-3"
+            value={form.age}
+            onChange={(event) => setForm((current) => ({ ...current, age: event.target.value }))}
+            placeholder="Enter patient age"
           />
+          <p className="mt-3 text-xs leading-6 text-slate-500 dark:text-slate-400">
+            Accepts whole numbers from 0 to 120.
+          </p>
+          {errors.age ? (
+            <p className="mt-2 text-sm text-red-600 dark:text-red-300">{errors.age}</p>
+          ) : null}
         </div>
 
-        <div>
-           <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
-            <User className="w-4 h-4 text-brandBlue" /> Biological Sex
+        <div className="rounded-3xl border border-slate-200/70 bg-white/80 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-950/60">
+          <label className="label-text flex items-center gap-2" htmlFor="patient-sex">
+            <UserRound className="h-4 w-4 text-brandBlue dark:text-cyan-300" />
+            Biological Sex
           </label>
           <select
-            required
-            value={gender}
-            onChange={(e) => setGender(e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brandBlue focus:border-brandBlue transition-all outline-none bg-white"
+            id="patient-sex"
+            className="input-shell mt-3"
+            value={form.sex}
+            onChange={(event) => setForm((current) => ({ ...current, sex: event.target.value }))}
           >
-            <option value="" disabled>Select option...</option>
-            <option value="Male">Male</option>
-            <option value="Female">Female</option>
-            <option value="Other">Other</option>
-            <option value="Prefer not to say">Prefer not to say</option>
+            <option value="">Select a value</option>
+            {sexOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
           </select>
+          <p className="mt-3 text-xs leading-6 text-slate-500 dark:text-slate-400">
+            Stored only within the authenticated browser session and sent to the backend for
+            structured analysis.
+          </p>
+          {errors.sex ? (
+            <p className="mt-2 text-sm text-red-600 dark:text-red-300">{errors.sex}</p>
+          ) : null}
         </div>
 
-        <div className="pt-6 border-t border-gray-100">
-          <button
-            type="submit"
-            disabled={!age || !gender}
-            className={`w-full py-4 rounded-full font-bold text-lg shadow-md transition-all ${
-              age && gender
-                ? 'bg-brandBlue text-white hover:bg-blue-700 transform hover:scale-105'
-                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-            }`}
-          >
-            Continue
+        <div className="md:col-span-2">
+          <button type="submit" className="primary-button w-full md:w-auto">
+            Continue to Symptom Selection
           </button>
         </div>
       </form>
-    </div>
+    </section>
   );
-};
-
-export default PatientInfoForm;
+}
