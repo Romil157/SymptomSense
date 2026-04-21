@@ -19,27 +19,22 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
-        working-directory: HealthCare
 
       - name: Run lint
         run: npm run lint
-        working-directory: HealthCare
 
       - name: Run unit and API tests
         run: npm test
-        working-directory: HealthCare
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps
-        working-directory: HealthCare
 
       - name: Build frontend
         run: npm run build
-        working-directory: HealthCare
 
       - name: Run end-to-end tests
         run: npm run test:e2e
-        working-directory: HealthCare
