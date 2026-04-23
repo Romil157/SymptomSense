@@ -70,3 +70,26 @@ export const aiInsightsSchema = z.object({
     .max(10)
     .default([]),
 });
+
+const medicationEducationRedFlagSchema = z.object({
+  symptom: z
+    .string()
+    .min(1)
+    .max(120)
+    .transform((value) => sanitizeFreeText(value, { maxLength: 120 })),
+  reason: z
+    .string()
+    .min(1)
+    .max(240)
+    .transform((value) => sanitizeFreeText(value, { maxLength: 240 })),
+});
+
+export const medicationEducationSchema = z.object({
+  disease: z
+    .string()
+    .min(1)
+    .max(160)
+    .transform((value) => sanitizeFreeText(value, { maxLength: 160 })),
+  patient: patientSchema,
+  redFlags: z.array(medicationEducationRedFlagSchema).max(10).default([]),
+});

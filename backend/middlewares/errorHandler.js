@@ -13,7 +13,8 @@ function toAppError(error) {
   return new AppError(500, 'INTERNAL_SERVER_ERROR', 'An unexpected server error occurred.');
 }
 
-export function errorHandler(error, req, res) {
+export function errorHandler(error, req, res, next) {
+  void next;
   const appError = toAppError(error);
 
   logger.error('Request failed.', {

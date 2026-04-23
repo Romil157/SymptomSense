@@ -22,3 +22,12 @@ export function getAiInsights(payload, token, signal) {
     body: payload,
   });
 }
+
+export function getMedicationEducation(payload, token, signal) {
+  return request('/medication-education', {
+    method: 'POST',
+    token,
+    signal,
+    body: payload,
+  });
+}

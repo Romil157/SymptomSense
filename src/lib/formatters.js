@@ -17,3 +17,31 @@ export function formatList(items) {
 
   return `${items.slice(0, -1).join(', ')}, and ${items.at(-1)}`;
 }
+
+export function formatDateTime(value) {
+  if (!value) {
+    return 'Not scheduled';
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
+export function formatCalendarDate(value) {
+  if (!value) {
+    return 'Unknown';
+  }
+
+  const date = new Date(`${value}T00:00:00Z`);
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(date);
+}

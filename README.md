@@ -12,6 +12,7 @@ SymptomSense has been refactored into a full-stack application with:
 
 - An Express backend that owns all external AI provider traffic
 - A modular, deterministic scoring engine with explainability output
+- Backend-managed medication schedules and reminder generation
 - JWT-based authentication and backend audit logging
 - Encrypted client-side storage using Web Crypto and IndexedDB
 - Centralized validation, rate limiting, and structured error handling
@@ -21,6 +22,9 @@ SymptomSense has been refactored into a full-stack application with:
 ## Key Features
 
 - Backend-only AI integrations with fallback deterministic insight generation
+- Medication schedule capture with backend-triggered reminder banners
+- AI-assisted reminder wording with deterministic fallback copy
+- Clinical medication education endpoint with strict JSON output and allowlist safety controls
 - Weighted symptom scoring with disease confidence, coverage metrics, and evidence summaries
 - Red-flag detection that escalates high-risk symptom combinations independently of ranking
 - JWT session handling with encrypted browser persistence
@@ -38,6 +42,9 @@ flowchart TD
     D --> E[Scoring Engine]
     E --> F[Red-Flag Rules]
     E --> G[Explainable Results]
+    B --> O[Medication Schedule Service]
+    O --> P[Reminder Scheduler]
+    P --> Q[AI Reminder Service]
     B --> H[ML Prediction Layer]
     H -->|Model Available| I[TensorFlow.js Runtime]
     H -->|Model Missing| E
@@ -52,7 +59,7 @@ flowchart TD
 
 - Frontend: React 19, Vite 8, Tailwind CSS, Lucide React
 - Backend: Node.js, Express 5, Zod, Helmet, express-rate-limit, jsonwebtoken
-- Data: CSV dataset parsed and cached with Papa Parse
+- Data: CSV dataset cache plus JSON-backed medication schedule store
 - Security: JWT, Web Crypto API, IndexedDB-backed key storage, audit logging
 - Testing: Jest, Supertest, Playwright
 - CI: GitHub Actions
@@ -67,6 +74,7 @@ HealthCare/
 |-- backend/
 |   |-- config/
 |   |-- controllers/
+|   |-- data/
 |   |-- domain/
 |   |   `-- scoring/
 |   |-- middlewares/
@@ -78,7 +86,9 @@ HealthCare/
 |   |   |-- auth/
 |   |   |-- cache/
 |   |   |-- dataset/
+|   |   |-- medications/
 |   |   `-- ml/
+|   |   `-- reminders/
 |   |-- utils/
 |   |-- app.js
 |   `-- server.js
@@ -184,6 +194,9 @@ The backend serves the built frontend from `dist/` when a production build exist
 | `ANALYSIS_CACHE_TTL_MS` | No | TTL for cached analysis responses. |
 | `AI_CACHE_TTL_MS` | No | TTL for cached AI insight responses. |
 | `AUDIT_LOG_FILE` | No | File path for persisted audit events. |
+| `MEDICATION_STORE_FILE` | No | JSON file used for persisted medication schedules and reminder state. |
+| `REMINDER_CHECK_INTERVAL_MS` | No | In-process scheduler interval in milliseconds. Defaults to `60000`. |
+| `REMINDER_DUE_WINDOW_MINUTES` | No | Reminder due window size in minutes. Defaults to `30`. |
 | `DATASET_PATH` | No | CSV path used by the dataset loader. |
 | `ML_MODEL_PATH` | No | TensorFlow.js model artifact location. |
 | `VITE_API_BASE_URL` | Yes | Frontend API base path. Defaults to `/api`. |
@@ -225,6 +238,96 @@ Response:
 #### `GET /api/catalog/symptoms`
 
 Returns the deduplicated symptom catalog and relative symptom weights. Requires `Authorization: Bearer <jwt>`.
+
+### Medication Schedules
+
+#### `POST /api/medications`
+
+Create a backend-managed medication reminder schedule. Requires `Authorization: Bearer <jwt>`.
+
+Request:
+
+```json
+{
+  "name": "Paracetamol",
+  "dosage": "500mg",
+  "frequency": "twice daily",
+  "times": ["09:00", "21:00"],
+  "durationDays": 5,
+  "timezone": "Asia/Calcutta"
+}
+```
+
+Response:
+
+```json
+{
+  "requestId": "94f8f870-f0aa-4f9f-8c69-bf31f26d04b5",
+  "medication": {
+    "id": "d54a55ab-fd79-4f9f-bfd5-8559fbc52975",
+    "name": "Paracetamol",
+    "dosage": "500mg",
+    "frequency": "twice daily",
+    "times": ["09:00", "21:00"],
+    "durationDays": 5,
+    "timezone": "Asia/Calcutta",
+    "createdAt": "2026-04-23T09:13:00.000Z",
+    "startsOn": "2026-04-23",
+    "endsOn": "2026-04-27",
+    "nextDueAt": "2026-04-23T15:30:00.000Z"
+  }
+}
+```
+
+#### `GET /api/medications`
+
+Return all active medication schedules for the authenticated clinician session.
+
+#### `DELETE /api/medications/:medicationId`
+
+Delete a stored medication reminder schedule for the authenticated clinician session. This also removes
+any queued reminders associated with that medication record.
+
+### Reminder Trigger
+
+#### `POST /api/reminders/trigger`
+
+Run the backend reminder check and return undelivered reminders for the authenticated clinician session. Requires `Authorization: Bearer <jwt>`.
+
+Request:
+
+```json
+{
+  "now": "2026-04-23T09:15:00.000Z"
+}
+```
+
+The `now` override is accepted only outside production and is intended for deterministic tests or manual simulation.
+
+Response:
+
+```json
+{
+  "requestId": "5c1f8f0c-040a-43bf-b402-b9a4a56e615a",
+  "checkedAt": "2026-04-23T09:15:00.000Z",
+  "reminders": [
+    {
+      "id": "6c1dd83d-a670-498d-a6a6-b80904712bb9",
+      "medicationId": "d54a55ab-fd79-4f9f-bfd5-8559fbc52975",
+      "dueAt": "2026-04-23T09:00:00.000Z",
+      "message": "Time to take 500mg Paracetamol. Staying consistent helps maintain effectiveness.",
+      "provider": "fallback",
+      "model": "deterministic-medication-reminder-v1",
+      "medication": {
+        "name": "Paracetamol",
+        "dosage": "500mg",
+        "frequency": "twice daily",
+        "times": ["09:00", "21:00"]
+      }
+    }
+  ]
+}
+```
 
 ### Symptom Analysis
 
@@ -337,6 +440,49 @@ Response:
 }
 ```
 
+### Medication Education
+
+#### `POST /api/medication-education`
+
+Returns educational, non-prescriptive medication information for a condition and patient profile.
+Requires `Authorization: Bearer <jwt>`.
+
+Request:
+
+```json
+{
+  "disease": "Tension headache",
+  "patient": {
+    "age": 34,
+    "sex": "male"
+  },
+  "redFlags": []
+}
+```
+
+Response:
+
+```json
+{
+  "requestId": "f6c7591d-7d8f-4b02-8e6c-f9851e85f58f",
+  "provider": "fallback",
+  "model": "deterministic-medication-education-v1",
+  "generatedAt": "2026-04-23T12:15:31.002Z",
+  "cached": false,
+  "medications": [
+    {
+      "name": "Acetaminophen (Paracetamol)",
+      "category": "Analgesic/Antipyretic",
+      "usage": "Often used for mild pain or fever relief.",
+      "dosage": "325-650 mg every 4-6 hours; maximum 3,000 mg/day.",
+      "notes": "Avoid combining with other products that contain acetaminophen."
+    }
+  ],
+  "generalAdvice": "Hydration, rest, and trigger avoidance are commonly recommended. Seek care for severe, persistent, or unusual headache patterns.",
+  "disclaimer": "This information is for educational purposes only and does not constitute medical advice. Always consult a qualified healthcare professional before taking any medication."
+}
+```
+
 ### Health Check
 
 #### `GET /api/health`
@@ -346,6 +492,8 @@ Returns backend liveness metadata for local orchestration and CI checks.
 ## Security and Compliance Notes
 
 - All external AI provider traffic is routed through the backend.
+- Medication schedules and reminder generation are also backend-owned and never depend on the browser Notifications API.
+- Medication education output is backend-governed with allowlist filtering and safety gates for red-flag or under-18 contexts.
 - API secrets are sourced from environment variables and are never stored in the frontend bundle.
 - Input validation is enforced with Zod on all write endpoints.
 - Rate limiting is active for global API traffic, authentication, and AI generation routes.
@@ -367,6 +515,7 @@ The backend exposes a `predictSymptoms(symptomsArray)` pathway through `backend/
 
 - The dataset is parsed once and cached in memory by the backend.
 - Analysis and AI insight responses use in-memory TTL caches.
+- Medication schedules are loaded from a lightweight JSON store and scanned by the reminder engine on a fixed interval.
 - The React workflow lazy-loads core analysis screens.
 - Symptom search uses deferred rendering for smoother filtering on large catalogs.
 
@@ -399,7 +548,7 @@ GitHub Actions runs the following on every push to `main` and on every pull requ
 3. Run Jest unit and API tests
 4. Install Playwright browsers
 5. Build the frontend
-6. Run the Playwright end-to-end flow
+6. Run the Playwright end-to-end flows, including medication reminder coverage
 
 ## Medical Disclaimer
 
@@ -410,6 +559,7 @@ SymptomSense is not a diagnosis system, not a treatment recommendation engine, a
 - Replace bootstrap email/password authentication with a managed identity provider and role-based access control
 - Add clinician-reviewed symptom weights and medically validated thresholds
 - Support longitudinal patient sessions with consent-aware persistence
+- Add missed-dose adherence tracking and coaching suggestions
 - Introduce calibrated ML model serving with versioned model registry controls
 - Add observability dashboards, distributed tracing, and security alerting
 

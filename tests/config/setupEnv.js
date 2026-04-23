@@ -9,3 +9,6 @@ process.env.AI_PROVIDER = 'fallback';
 process.env.ANALYSIS_CACHE_TTL_MS = '1000';
 process.env.AI_CACHE_TTL_MS = '1000';
 process.env.AUDIT_LOG_FILE = 'backend/logs/test-audit.log';
+process.env.MEDICATION_STORE_FILE = 'backend/data/test-medications.runtime.json';
+process.env.REMINDER_CHECK_INTERVAL_MS = '60000';
+process.env.REMINDER_DUE_WINDOW_MINUTES = '30';

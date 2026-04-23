@@ -31,3 +31,4 @@ coverage
 playwright-report
 test-results
 backend/logs/*.log
+backend/data/*.json

@@ -9,6 +9,9 @@ const appEnv = {
   AUTH_EMAIL: 'clinician@symptomsense.local',
   AUTH_PASSWORD: 'StrongPassword123!',
   AI_PROVIDER: 'fallback',
+  MEDICATION_STORE_FILE: 'backend/data/playwright-medications.runtime.json',
+  REMINDER_CHECK_INTERVAL_MS: '60000',
+  REMINDER_DUE_WINDOW_MINUTES: '30',
 };
 
 export default defineConfig({

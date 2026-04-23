@@ -86,4 +86,28 @@ describe('SymptomSense API', () => {
     expect(response.body.provider).toBe('fallback');
     expect(response.body.insight).toContain('Panic Disorder');
   });
+
+  it('returns safe medication education payloads through the dedicated backend endpoint', async () => {
+    const loginResponse = await request(app).post('/api/auth/login').send({
+      email: 'clinician@symptomsense.local',
+      password: 'StrongPassword123!',
+    });
+
+    const response = await request(app)
+      .post('/api/medication-education')
+      .set('Authorization', `Bearer ${loginResponse.body.token}`)
+      .send({
+        disease: 'Tension headache',
+        patient: {
+          age: 34,
+          sex: 'male',
+        },
+        redFlags: [],
+      });
+
+    expect(response.status).toBe(200);
+    expect(Array.isArray(response.body.medications)).toBe(true);
+    expect(response.body.medications.length).toBeGreaterThan(0);
+    expect(response.body.disclaimer).toContain('educational purposes only');
+  });
 });

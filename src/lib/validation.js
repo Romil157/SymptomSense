@@ -27,6 +27,31 @@ export const symptomSelectionSchema = z
   .min(1, 'Select at least one symptom before running analysis.')
   .max(20, 'A maximum of 20 symptoms can be analyzed at once.');
 
+const medicationTimePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export const medicationFormSchema = z.object({
+  name: z
+    .string()
+    .min(1, 'Enter a medication name.')
+    .max(120, 'Medication names must be 120 characters or less.'),
+  dosage: z
+    .string()
+    .min(1, 'Enter a dosage value.')
+    .max(80, 'Dosage values must be 80 characters or less.'),
+  durationDays: z.coerce
+    .number()
+    .int('Duration must be a whole number.')
+    .min(1, 'Duration must be at least 1 day.')
+    .max(365, 'Duration must be 365 days or less.'),
+  times: z
+    .array(z.string().regex(medicationTimePattern, 'Times must use 24-hour HH:MM format.'))
+    .min(1, 'Add at least one reminder time.')
+    .max(4, 'A medication can only have up to 4 daily reminder times.')
+    .refine((times) => new Set(times).size === times.length, {
+      message: 'Reminder times must be unique.',
+    }),
+});
+
 export function validateForm(schema, payload) {
   const result = schema.safeParse(payload);
 

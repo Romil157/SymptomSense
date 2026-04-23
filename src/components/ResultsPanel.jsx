@@ -2,13 +2,14 @@ import {
   Activity,
   AlertTriangle,
   BrainCircuit,
+  Pill,
   RefreshCcw,
   ShieldAlert,
   Stethoscope,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { formatPercent } from '../lib/formatters';
-import { getAiInsights } from '../services/analysisService';
+import { getAiInsights, getMedicationEducation } from '../services/analysisService';
 
 const confidenceStyles = {
   High: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-950/40 dark:text-emerald-200',
@@ -25,6 +26,11 @@ export default function ResultsPanel({
   onUnauthorized,
 }) {
   const [insightState, setInsightState] = useState({
+    loading: false,
+    error: null,
+    payload: null,
+  });
+  const [medicationEducationState, setMedicationEducationState] = useState({
     loading: false,
     error: null,
     payload: null,
@@ -90,6 +96,62 @@ export default function ResultsPanel({
     }
 
     loadInsight();
+
+    return () => controller.abort();
+  }, [analysis.redFlags, onUnauthorized, patient, token, topResult]);
+
+  useEffect(() => {
+    if (!topResult || !token) {
+      return undefined;
+    }
+
+    const controller = new AbortController();
+
+    async function loadMedicationEducation() {
+      setMedicationEducationState({
+        loading: true,
+        error: null,
+        payload: null,
+      });
+
+      try {
+        const payload = await getMedicationEducation(
+          {
+            disease: topResult.disease,
+            patient,
+            redFlags: analysis.redFlags.map((entry) => ({
+              symptom: entry.symptom,
+              reason: entry.reason,
+            })),
+          },
+          token,
+          controller.signal
+        );
+
+        setMedicationEducationState({
+          loading: false,
+          error: null,
+          payload,
+        });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        if (error.status === 401) {
+          onUnauthorized();
+          return;
+        }
+
+        setMedicationEducationState({
+          loading: false,
+          error: error.message,
+          payload: null,
+        });
+      }
+    }
+
+    loadMedicationEducation();
 
     return () => controller.abort();
   }, [analysis.redFlags, onUnauthorized, patient, token, topResult]);
@@ -331,6 +393,85 @@ export default function ResultsPanel({
         ) : (
           <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
             AI insight is not yet available for the current result.
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-3xl border border-slate-200/80 bg-white/85 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-950/60">
+        <div className="flex items-center gap-3">
+          <Pill className="h-5 w-5 text-brandBlue dark:text-cyan-300" />
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+            Medication Education (General Information)
+          </h3>
+        </div>
+
+        {medicationEducationState.loading ? (
+          <div className="mt-5 flex items-center gap-3 text-sm text-slate-600 dark:text-slate-300">
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-brandBlue border-t-transparent" />
+            Loading backend-governed medication education...
+          </div>
+        ) : medicationEducationState.error ? (
+          <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-950/40 dark:text-red-200">
+            {medicationEducationState.error}
+          </div>
+        ) : medicationEducationState.payload ? (
+          <div className="mt-5 space-y-4">
+            <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+              <span className="rounded-full border border-slate-200 px-3 py-1 dark:border-slate-700">
+                Provider {medicationEducationState.payload.provider}
+              </span>
+              <span className="rounded-full border border-slate-200 px-3 py-1 dark:border-slate-700">
+                Model {medicationEducationState.payload.model}
+              </span>
+            </div>
+
+            {medicationEducationState.payload.medications.length > 0 ? (
+              <div className="grid gap-3">
+                {medicationEducationState.payload.medications.map((medication) => (
+                  <article
+                    key={medication.name}
+                    className="rounded-3xl border border-slate-200/80 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-900/70"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <h4 className="text-base font-semibold text-slate-900 dark:text-white">
+                        {medication.name}
+                      </h4>
+                      <span className="rounded-full border border-brandBlue/20 bg-brandBlue/10 px-3 py-1 text-xs font-semibold text-brandBlue dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:text-cyan-200">
+                        {medication.category}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-sm leading-7 text-slate-700 dark:text-slate-200">
+                      {medication.usage}
+                    </p>
+                    <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                      <span className="font-semibold">General adult range:</span> {medication.dosage}
+                    </p>
+                    <p className="mt-2 text-xs leading-6 text-slate-500 dark:text-slate-400">
+                      {medication.notes}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
+                {medicationEducationState.payload.provider === 'policy'
+                  ? 'Medication options are intentionally withheld because this context requires direct clinical supervision.'
+                  : 'General symptom relief options are shown below. Consult a healthcare professional for condition-specific treatment.'}
+              </div>
+            )}
+
+            <div className="rounded-3xl border border-slate-200/80 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-900/70">
+              <p className="text-sm leading-7 text-slate-700 dark:text-slate-200">
+                {medicationEducationState.payload.generalAdvice}
+              </p>
+              <p className="mt-3 text-xs leading-6 text-slate-500 dark:text-slate-400">
+                {medicationEducationState.payload.disclaimer}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
+            Medication education is not yet available for the current result.
           </div>
         )}
       </section>

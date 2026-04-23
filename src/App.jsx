@@ -3,29 +3,34 @@ import {
   AlertTriangle,
   ClipboardPlus,
   LogOut,
+  Pill,
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
-import {
-  Suspense,
-  lazy,
-  startTransition,
-  useEffect,
-  useState,
-} from 'react';
+import { Suspense, lazy, startTransition, useEffect, useEffectEvent, useState } from 'react';
 import AuthGate from './components/AuthGate';
 import DarkModeToggle from './components/DarkModeToggle';
+import ReminderBanner from './components/ReminderBanner';
 import { useAuthSession } from './hooks/useAuthSession';
 import { useTheme } from './hooks/useTheme';
 import { symptomSelectionSchema } from './lib/validation';
 import { analyzeSymptoms, getSymptomCatalog } from './services/analysisService';
+import {
+  createMedication,
+  deleteMedication as deleteMedicationSchedule,
+  getMedications,
+  triggerReminderCheck,
+} from './services/medicationService';
 import { secureStorage } from './services/secureStorage';
 
+const MedicationForm = lazy(() => import('./components/MedicationForm'));
+const MedicationList = lazy(() => import('./components/MedicationList'));
 const PatientInfoForm = lazy(() => import('./components/PatientInfoForm'));
 const ResultsPanel = lazy(() => import('./components/ResultsPanel'));
 const SymptomSelector = lazy(() => import('./components/SymptomSelector'));
 
 const DISCLAIMER_STORAGE_KEY = 'disclaimer';
+const REMINDER_POLL_INTERVAL_MS = 60 * 1000;
 
 const steps = [
   { id: 1, label: 'Patient Profile' },
@@ -38,6 +43,44 @@ const suspenseFallback = (
     Loading workflow component...
   </div>
 );
+
+const initialMedicationState = {
+  loading: false,
+  submitting: false,
+  checkingReminders: false,
+  deletingMedicationId: null,
+  error: null,
+  reminderError: null,
+  lastCheckedAt: null,
+};
+
+function sortMedicationSchedules(medications) {
+  return [...medications].sort((left, right) => {
+    if (!left.nextDueAt && !right.nextDueAt) {
+      return left.name.localeCompare(right.name);
+    }
+
+    if (!left.nextDueAt) {
+      return 1;
+    }
+
+    if (!right.nextDueAt) {
+      return -1;
+    }
+
+    return left.nextDueAt.localeCompare(right.nextDueAt);
+  });
+}
+
+function mergeReminderQueue(currentReminders, nextReminders) {
+  const reminderMap = new Map(currentReminders.map((reminder) => [reminder.id, reminder]));
+
+  for (const reminder of nextReminders) {
+    reminderMap.set(reminder.id, reminder);
+  }
+
+  return Array.from(reminderMap.values()).sort((left, right) => left.dueAt.localeCompare(right.dueAt));
+}
 
 function App() {
   const { session, isHydrating, authError, login, logout, clearAuthError } = useAuthSession();
@@ -59,6 +102,9 @@ function App() {
     loading: false,
     error: null,
   });
+  const [medications, setMedications] = useState([]);
+  const [medicationState, setMedicationState] = useState(initialMedicationState);
+  const [reminders, setReminders] = useState([]);
   const [loginPending, setLoginPending] = useState(false);
 
   useEffect(() => {
@@ -83,6 +129,90 @@ function App() {
       isMounted = false;
     };
   }, []);
+
+  const refreshMedicationSchedules = useEffectEvent(async (token, { silent = false } = {}) => {
+    if (!token) {
+      return null;
+    }
+
+    if (!silent) {
+      setMedicationState((current) => ({
+        ...current,
+        loading: true,
+        error: null,
+      }));
+    }
+
+    try {
+      const payload = await getMedications(token);
+      setMedications(sortMedicationSchedules(payload.medications));
+      setMedicationState((current) => ({
+        ...current,
+        loading: false,
+        error: null,
+      }));
+
+      return payload.medications;
+    } catch (error) {
+      if (error.status === 401) {
+        await logout();
+        return null;
+      }
+
+      setMedicationState((current) => ({
+        ...current,
+        loading: false,
+        error: error.message,
+      }));
+
+      return null;
+    }
+  });
+
+  const checkMedicationReminders = useEffectEvent(
+    async ({ token, silent = false, now = undefined, refreshSchedules = false } = {}) => {
+      if (!token) {
+        return null;
+      }
+
+      setMedicationState((current) => ({
+        ...current,
+        checkingReminders: true,
+        reminderError: silent ? current.reminderError : null,
+      }));
+
+      try {
+        const payload = await triggerReminderCheck(token, now ? { now } : {});
+
+        setReminders((current) => mergeReminderQueue(current, payload.reminders));
+        setMedicationState((current) => ({
+          ...current,
+          checkingReminders: false,
+          reminderError: null,
+          lastCheckedAt: payload.checkedAt,
+        }));
+
+        if (payload.reminders.length > 0 || refreshSchedules) {
+          await refreshMedicationSchedules(token, { silent: true });
+        }
+
+        return payload;
+      } catch (error) {
+        if (error.status === 401) {
+          await logout();
+          return null;
+        }
+
+        setMedicationState((current) => ({
+          ...current,
+          checkingReminders: false,
+          reminderError: error.message,
+        }));
+
+        return null;
+      }
+    }
+  );
 
   async function handleCatalogReload() {
     if (!session?.token) {
@@ -111,6 +241,39 @@ function App() {
         loading: false,
         error: error.message,
       });
+    }
+  }
+
+  async function handleMedicationReload() {
+    if (!session?.token) {
+      return;
+    }
+
+    setMedicationState((current) => ({
+      ...current,
+      loading: true,
+      error: null,
+    }));
+
+    try {
+      const payload = await getMedications(session.token);
+      setMedications(sortMedicationSchedules(payload.medications));
+      setMedicationState((current) => ({
+        ...current,
+        loading: false,
+        error: null,
+      }));
+    } catch (error) {
+      if (error.status === 401) {
+        await logout();
+        return;
+      }
+
+      setMedicationState((current) => ({
+        ...current,
+        loading: false,
+        error: error.message,
+      }));
     }
   }
 
@@ -165,6 +328,52 @@ function App() {
     setStep(1);
   }, [session?.token, logout]);
 
+  useEffect(() => {
+    if (session?.token) {
+      refreshMedicationSchedules(session.token);
+      return;
+    }
+
+    setMedications([]);
+    setReminders([]);
+    setMedicationState(initialMedicationState);
+  }, [session?.token]);
+
+  useEffect(() => {
+    if (!session?.token) {
+      setReminders([]);
+      return undefined;
+    }
+
+    let isCancelled = false;
+    let isChecking = false;
+
+    async function pollReminders() {
+      if (isCancelled || isChecking) {
+        return;
+      }
+
+      isChecking = true;
+
+      try {
+        await checkMedicationReminders({
+          token: session.token,
+          silent: true,
+        });
+      } finally {
+        isChecking = false;
+      }
+    }
+
+    pollReminders();
+    const intervalId = setInterval(pollReminders, REMINDER_POLL_INTERVAL_MS);
+
+    return () => {
+      isCancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [session?.token]);
+
   async function handleLogin(credentials) {
     setLoginPending(true);
 
@@ -178,6 +387,127 @@ function App() {
   async function handleAcceptDisclaimer() {
     await secureStorage.setItem(DISCLAIMER_STORAGE_KEY, true);
     setDisclaimerAccepted(true);
+  }
+
+  async function handleMedicationCreate(payload) {
+    if (!session?.token) {
+      return false;
+    }
+
+    setMedicationState((current) => ({
+      ...current,
+      submitting: true,
+      error: null,
+    }));
+
+    try {
+      const response = await createMedication(payload, session.token);
+      setMedications((current) => sortMedicationSchedules([response.medication, ...current]));
+      setMedicationState((current) => ({
+        ...current,
+        submitting: false,
+        error: null,
+      }));
+      return true;
+    } catch (error) {
+      if (error.status === 401) {
+        await logout();
+        return false;
+      }
+
+      setMedicationState((current) => ({
+        ...current,
+        submitting: false,
+        error: error.message,
+      }));
+
+      return false;
+    }
+  }
+
+  async function handleReminderRefresh() {
+    if (!session?.token) {
+      return;
+    }
+
+    setMedicationState((current) => ({
+      ...current,
+      checkingReminders: true,
+      reminderError: null,
+    }));
+
+    try {
+      const payload = await triggerReminderCheck(session.token);
+
+      setReminders((current) => mergeReminderQueue(current, payload.reminders));
+      setMedicationState((current) => ({
+        ...current,
+        checkingReminders: false,
+        reminderError: null,
+        lastCheckedAt: payload.checkedAt,
+      }));
+
+      await handleMedicationReload();
+    } catch (error) {
+      if (error.status === 401) {
+        await logout();
+        return;
+      }
+
+      setMedicationState((current) => ({
+        ...current,
+        checkingReminders: false,
+        reminderError: error.message,
+      }));
+    }
+  }
+
+  async function handleMedicationDelete(medication) {
+    if (!session?.token || !medication?.id) {
+      return;
+    }
+
+    const shouldDelete = window.confirm(
+      `Delete reminder schedule for ${medication.name}? This will stop future reminders for this course.`
+    );
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    setMedicationState((current) => ({
+      ...current,
+      deletingMedicationId: medication.id,
+      error: null,
+    }));
+
+    try {
+      await deleteMedicationSchedule(medication.id, session.token);
+      setMedications((current) => current.filter((entry) => entry.id !== medication.id));
+      setReminders((current) =>
+        current.filter((reminder) => reminder.medicationId !== medication.id)
+      );
+      setMedicationState((current) => ({
+        ...current,
+        deletingMedicationId: null,
+        error: null,
+      }));
+    } catch (error) {
+      if (error.status === 401) {
+        await logout();
+        return;
+      }
+
+      setMedicationState((current) => ({
+        ...current,
+        deletingMedicationId: null,
+        error: error.message,
+      }));
+    }
+  }
+
+  function handleDismissReminder(reminderId) {
+    setReminders((current) => current.filter((reminder) => reminder.id !== reminderId));
   }
 
   function handlePatientComplete(nextPatient) {
@@ -302,8 +632,8 @@ function App() {
                 strictly explanatory and may be incomplete or incorrect.
               </p>
               <p>
-                If symptoms suggest an emergency, seek in-person assessment immediately rather than
-                waiting for software output.
+                Medication reminders are educational support only and must not override clinician
+                instructions or pharmacy labeling.
               </p>
             </div>
             <button
@@ -373,12 +703,12 @@ function App() {
                       Production Workflow
                     </span>
                     <h2 className="text-3xl font-bold tracking-tight text-brandInk dark:text-white">
-                      Server-side triage with structured explainability
+                      Server-side triage with medication adherence support
                     </h2>
                     <p className="max-w-3xl text-sm leading-7 text-slate-600 dark:text-slate-300">
-                      The frontend now loads the symptom catalog from the backend, authenticates via
-                      JWT, encrypts client-side session state with Web Crypto, and renders
-                      explainable results produced by the backend scoring engine.
+                      The frontend authenticates through JWT, loads backend-governed symptom and
+                      medication data, and renders both explainable triage output and backend-driven
+                      reminder prompts without relying on browser notification APIs.
                     </p>
                   </div>
 
@@ -390,6 +720,12 @@ function App() {
                     <div className="rounded-2xl bg-white/70 px-4 py-3 shadow-sm dark:bg-slate-900/70">
                       <p className="font-semibold text-slate-900 dark:text-white">Catalog Size</p>
                       <p>{catalog.length || 0} backend-driven symptoms loaded.</p>
+                    </div>
+                    <div className="rounded-2xl bg-white/70 px-4 py-3 shadow-sm dark:bg-slate-900/70">
+                      <p className="font-semibold text-slate-900 dark:text-white">
+                        Medication Schedules
+                      </p>
+                      <p>{medications.length} active backend-managed courses.</p>
                     </div>
                   </div>
                 </div>
@@ -422,8 +758,48 @@ function App() {
                       </span>
                     </div>
                   ))}
+                  <div className="rounded-3xl border border-brandBlue/15 bg-brandBlue/5 px-4 py-4 dark:border-cyan-500/20 dark:bg-cyan-500/5">
+                    <div className="flex items-start gap-3">
+                      <Pill className="mt-1 h-5 w-5 text-brandBlue dark:text-cyan-300" />
+                      <div className="text-sm text-slate-600 dark:text-slate-300">
+                        <p className="font-semibold text-slate-900 dark:text-white">
+                          Medication reminders are live
+                        </p>
+                        <p className="mt-1">
+                          The backend checks due doses every minute and the app polls for reminder
+                          banners while your session is active.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
+            </section>
+
+            <ReminderBanner reminders={reminders} onDismiss={handleDismissReminder} />
+
+            <section className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+              <Suspense fallback={suspenseFallback}>
+                <MedicationForm
+                  isSubmitting={medicationState.submitting}
+                  onSubmit={handleMedicationCreate}
+                />
+              </Suspense>
+
+              <Suspense fallback={suspenseFallback}>
+                <MedicationList
+                  medications={medications}
+                  loading={medicationState.loading}
+                  error={medicationState.error}
+                  reminderError={medicationState.reminderError}
+                  isCheckingReminders={medicationState.checkingReminders}
+                  deletingMedicationId={medicationState.deletingMedicationId}
+                  lastCheckedAt={medicationState.lastCheckedAt}
+                  onRefresh={handleMedicationReload}
+                  onCheckReminders={handleReminderRefresh}
+                  onDeleteMedication={handleMedicationDelete}
+                />
+              </Suspense>
             </section>
 
             <section className="panel-card">

@@ -43,6 +43,12 @@ export const config = Object.freeze({
   aiCacheTtlMs: parseNumber(process.env.AI_CACHE_TTL_MS, 30 * 60 * 1000),
   aiRequestTimeoutMs: parseNumber(process.env.AI_REQUEST_TIMEOUT_MS, 30 * 1000),
   auditLogFile: resolvePath(process.env.AUDIT_LOG_FILE, path.join('backend', 'logs', 'audit.log')),
+  medicationStoreFile: resolvePath(
+    process.env.MEDICATION_STORE_FILE,
+    path.join('backend', 'data', 'medications.runtime.json')
+  ),
+  reminderCheckIntervalMs: parseNumber(process.env.REMINDER_CHECK_INTERVAL_MS, 60 * 1000),
+  reminderDueWindowMinutes: parseNumber(process.env.REMINDER_DUE_WINDOW_MINUTES, 30),
   datasetPath: resolvePath(process.env.DATASET_PATH, path.join('public', 'cleaned_dataset.csv')),
   mlModelPath: resolvePath(process.env.ML_MODEL_PATH, path.join('backend', 'ml-model', 'model.json')),
 });
@@ -54,5 +60,13 @@ export function validateRuntimeConfig() {
 
   if (config.isProduction && config.authPassword === 'StrongPassword123!') {
     throw new Error('AUTH_PASSWORD must be changed before running in production.');
+  }
+
+  if (config.reminderCheckIntervalMs < 1_000) {
+    throw new Error('REMINDER_CHECK_INTERVAL_MS must be at least 1000 milliseconds.');
+  }
+
+  if (config.reminderDueWindowMinutes < 1 || config.reminderDueWindowMinutes > 240) {
+    throw new Error('REMINDER_DUE_WINDOW_MINUTES must be between 1 and 240.');
   }
 }

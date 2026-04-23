@@ -2,6 +2,7 @@ import { createApp } from './app.js';
 import { config, validateRuntimeConfig } from './config/env.js';
 import { logger } from './config/logger.js';
 import { warmDatasetCache } from './services/dataset/datasetService.js';
+import { startReminderScheduler, stopReminderScheduler } from './services/reminders/reminderScheduler.js';
 
 async function startServer() {
   validateRuntimeConfig();
@@ -14,9 +15,11 @@ async function startServer() {
       environment: config.env,
     });
   });
+  startReminderScheduler();
 
   const shutdown = (signal) => {
     logger.info('Shutting down SymptomSense backend.', { signal });
+    stopReminderScheduler();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();
   };
